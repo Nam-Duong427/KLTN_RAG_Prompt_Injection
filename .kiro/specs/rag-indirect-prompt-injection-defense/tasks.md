@@ -1,0 +1,310 @@
+# Kế Hoạch Triển Khai: Nghiên Cứu Cơ Chế Phòng Chống Indirect Prompt Injection trong Hệ Thống RAG
+
+## Tổng Quan
+
+Triển khai framework thực nghiệm theo kiến trúc modular pipeline gồm 8 nhóm task chính: cấu trúc dự án & kiểu dữ liệu, core pipeline, lớp phòng thủ, tích hợp LLM, đánh giá & báo cáo, CLI & cấu hình, tích hợp toàn bộ pipeline, và kiểm thử thực nghiệm. Ngôn ngữ triển khai: **Python**, thư viện PBT: **hypothesis**.
+
+## Tasks
+
+- [ ] 1. Khởi tạo cấu trúc dự án và định nghĩa kiểu dữ liệu cốt lõi
+  - Tạo cấu trúc thư mục `rag_defense/` theo thiết kế
+  - Tạo `pyproject.toml` hoặc `requirements.txt` với các dependency: `sentence-transformers`, `chromadb`, `faiss-cpu`, `PyMuPDF`, `beautifulsoup4`, `requests`, `scikit-learn`, `torch`, `openai`, `pyyaml`, `click`, `hypothesis`, `pytest`, `pandas`, `matplotlib`, `scipy`
+  - Định nghĩa tất cả dataclass trong `rag_defense/core/models.py`: `Document`, `Chunk`, `DocumentMetadata`, `DefenseConfig`, `PipelineConfig`, `LLMResponse`, `ExperimentResult`, `ModelMetrics`, `Report`, `PatternMatch`, `AttentionMatrix`, `BaselineStats`, `SignificanceResult`
+  - Định nghĩa exception hierarchy trong `rag_defense/core/exceptions.py`: `RAGDefenseError`, `DocumentLoadError`, `HashIntegrityError`, `VectorStoreError`, `LLMConnectionError`, `ConfigValidationError`
+  - Tạo `rag_defense/__init__.py` và các `__init__.py` cho từng subpackage
+  - _Yêu cầu: 1.1–1.9, 2.1–2.5, 3.1–3.7, 4.1–4.7, 5.1–5.6, 6.1–6.6, 7.1–7.6, 8.1–8.5_
+
+- [ ] 2. Triển khai utils: logger và seed manager
+  - [ ] 2.1 Triển khai `rag_defense/utils/logger.py`
+    - Structured logging với level INFO/DEBUG có thể cấu hình
+    - Format log bao gồm timestamp, module, level, message
+    - _Yêu cầu: 7.4_
+  - [ ] 2.2 Triển khai `rag_defense/utils/seed_manager.py`
+    - Hàm `set_seed(seed: int)` thiết lập seed cho `random`, `numpy`, `torch`
+    - Hàm `get_current_seed() -> int`
+    - _Yêu cầu: 8.4_
+
+- [ ] 3. Triển khai config loader
+  - [ ] 3.1 Triển khai `rag_defense/config/config_loader.py`
+    - Hàm `load_config(path: str) -> PipelineConfig` đọc YAML và validate
+    - Hàm `save_config(config: PipelineConfig, path: str)` serialize sang YAML
+    - Raise `ConfigValidationError` khi field bắt buộc thiếu hoặc sai kiểu
+    - _Yêu cầu: 7.5_
+  - [ ]* 3.2 Viết property test cho config serialization round-trip
+    - **Property 17: Config and result serialization round-trip**
+    - **Validates: Requirements 7.2, 7.5, 8.4**
+    - File: `tests/property/test_serialization_props.py`
+
+- [ ] 4. Triển khai Document_Loader
+  - [ ] 4.1 Triển khai `rag_defense/core/document_loader.py`
+    - `load_pdf(path: str) -> Document` dùng PyMuPDF (`fitz`)
+    - `load_url(url: str) -> Document` dùng `requests` + `BeautifulSoup`
+    - `compute_hash(content: str) -> str` tính SHA-256 bằng `hashlib`
+    - `verify_hash(doc: Document) -> bool`
+    - `load_manifest(manifest_path: str) -> list[Document]` đọc manifest JSON
+    - Raise `DocumentLoadError` khi PDF hỏng hoặc URL không hợp lệ
+    - Raise `HashIntegrityError` khi hash không khớp
+    - Gắn metadata `label` ("benign"/"poisoned") và `attack_type` từ manifest
+    - _Yêu cầu: 1.1, 1.2, 1.3, 2.2, 8.1, 8.2, 8.3, 8.5_
+  - [ ]* 4.2 Viết unit tests cho Document_Loader
+    - Test load PDF hợp lệ, PDF hỏng, URL hợp lệ, URL không hợp lệ
+    - Test `compute_hash` và `verify_hash` với nội dung bị sửa đổi
+    - Test `load_manifest` với manifest hợp lệ và thiếu field
+    - File: `tests/unit/test_document_loader.py`
+    - _Yêu cầu: 1.1, 1.2, 1.3, 8.1, 8.2, 8.3, 8.5_
+  - [ ]* 4.3 Viết property test cho SHA-256 hash integrity
+    - **Property 18: SHA-256 hash integrity**
+    - **Validates: Requirements 8.1, 8.2**
+    - File: `tests/property/test_serialization_props.py`
+  - [ ]* 4.4 Viết property test cho manifest round-trip
+    - **Property 19: Manifest round-trip**
+    - **Validates: Requirements 8.5**
+    - File: `tests/property/test_serialization_props.py`
+  - [ ]* 4.5 Viết property test cho document label preservation
+    - **Property 5: Document label preservation**
+    - **Validates: Requirements 2.2**
+    - File: `tests/property/test_serialization_props.py`
+
+- [ ] 5. Triển khai Chunker
+  - [ ] 5.1 Triển khai `rag_defense/core/chunker.py`
+    - `chunk(document: Document, max_tokens: int = 512, overlap: int = 50) -> list[Chunk]`
+    - Dùng tokenizer (ví dụ `tiktoken` hoặc `transformers`) để đếm token chính xác
+    - Gán `chunk_id` theo format `"{doc_id}_chunk_{index}"`
+    - _Yêu cầu: 1.4_
+  - [ ]* 5.2 Viết unit tests cho Chunker
+    - Test chunk size không vượt 512 token
+    - Test overlap đúng 50 token giữa các chunk liên tiếp
+    - Test văn bản ngắn hơn max_tokens tạo ra đúng 1 chunk
+    - File: `tests/unit/test_chunker.py`
+    - _Yêu cầu: 1.4_
+  - [ ]* 5.3 Viết property test cho chunker size invariant
+    - **Property 1: Chunker size invariant**
+    - **Validates: Requirements 1.4**
+    - File: `tests/property/test_chunker_props.py`
+
+- [ ] 6. Triển khai Embedder
+  - [ ] 6.1 Triển khai `rag_defense/core/embedder.py`
+    - `embed(text: str) -> np.ndarray` dùng `sentence-transformers` (model `all-MiniLM-L6-v2`)
+    - `embed_batch(texts: list[str]) -> np.ndarray` trả về shape `(N, dim)`
+    - _Yêu cầu: 1.5_
+  - [ ]* 6.2 Viết unit tests cho Embedder
+    - Test output shape nhất quán
+    - Test embed_batch trả về đúng số hàng
+    - File: `tests/unit/test_embedder.py`
+    - _Yêu cầu: 1.5_
+  - [ ]* 6.3 Viết property test cho embedding dimension invariant
+    - **Property 2: Embedding dimension invariant**
+    - **Validates: Requirements 1.5**
+    - File: `tests/property/test_embedder_props.py`
+
+- [ ] 7. Triển khai Vector_Store
+  - [ ] 7.1 Triển khai `rag_defense/core/vector_store.py`
+    - Abstract interface `VectorStore` với `add()`, `search()`, `is_empty()`
+    - `ChromaVectorStore` dùng ChromaDB (mặc định)
+    - `FAISSVectorStore` dùng FAISS
+    - `search()` trả về top-k chunks sắp xếp theo cosine similarity giảm dần
+    - `is_empty()` trả về `True` khi chưa có document nào
+    - _Yêu cầu: 1.6, 1.7, 1.9_
+  - [ ]* 7.2 Viết unit tests cho Vector_Store
+    - Test add và search round-trip
+    - Test `is_empty()` trước và sau khi add
+    - Test search trên store rỗng trả về empty list
+    - File: `tests/unit/test_vector_store.py`
+    - _Yêu cầu: 1.6, 1.7, 1.9_
+  - [ ]* 7.3 Viết property test cho vector store round-trip
+    - **Property 3: Vector Store round-trip**
+    - **Validates: Requirements 1.6**
+    - File: `tests/property/test_embedder_props.py`
+  - [ ]* 7.4 Viết property test cho retriever result count invariant
+    - **Property 4: Retriever result count invariant**
+    - **Validates: Requirements 1.7**
+    - File: `tests/property/test_embedder_props.py`
+
+- [ ] 8. Checkpoint — Kiểm tra core pipeline
+  - Đảm bảo tất cả tests trong `tests/unit/` và `tests/property/` liên quan đến core pass
+  - Chạy: `pytest tests/unit/test_document_loader.py tests/unit/test_chunker.py tests/unit/test_embedder.py tests/unit/test_vector_store.py tests/property/test_chunker_props.py tests/property/test_embedder_props.py -v`
+  - Hỏi người dùng nếu có vấn đề phát sinh.
+
+- [ ] 9. Triển khai Context_Sanitizer
+  - [ ] 9.1 Triển khai `rag_defense/defense/context_sanitizer.py`
+    - `sanitize(chunks: list[Chunk]) -> list[Chunk]` — lọc pattern và chuẩn hóa Unicode
+    - `detect_patterns(text: str) -> list[PatternMatch]` — khớp 4 regex pattern mặc định (role override, instruction hijacking, data exfiltration, jailbreak)
+    - `normalize_unicode(text: str) -> str` — loại bỏ zero-width characters và Unicode control characters
+    - `apply_delimiters(context: str, query: str) -> str` — bọc context và query bằng delimiter token rõ ràng
+    - Ghi log WARNING với `chunk_id`, `removed_text`, `reason` khi loại bỏ nội dung
+    - Bỏ qua chunk bị xóa hoàn toàn, tiếp tục với chunks còn lại
+    - Xử lý mỗi chunk trong vòng 100ms
+    - _Yêu cầu: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
+  - [ ]* 9.2 Viết unit tests cho Context_Sanitizer
+    - Test từng attack type bị phát hiện và loại bỏ đúng
+    - Test `normalize_unicode` loại bỏ zero-width characters
+    - Test `apply_delimiters` tạo cấu trúc prompt đúng
+    - Test chunk bị xóa hoàn toàn được bỏ qua
+    - File: `tests/unit/test_context_sanitizer.py`
+    - _Yêu cầu: 3.1, 3.2, 3.3, 3.4, 3.5_
+  - [ ]* 9.3 Viết property test cho sanitizer removes injection patterns
+    - **Property 7: Sanitizer removes injection patterns and hidden characters**
+    - **Validates: Requirements 3.1, 3.3**
+    - File: `tests/property/test_sanitizer_props.py`
+  - [ ]* 9.4 Viết property test cho prompt delimiter structure invariant
+    - **Property 8: Prompt delimiter structure invariant**
+    - **Validates: Requirements 3.2**
+    - File: `tests/property/test_sanitizer_props.py`
+  - [ ]* 9.5 Viết property test cho sanitizer log completeness
+    - **Property 9: Sanitizer log completeness**
+    - **Validates: Requirements 3.4**
+    - File: `tests/property/test_sanitizer_props.py`
+
+- [ ] 10. Triển khai Anomaly_Detector
+  - [ ] 10.1 Triển khai `rag_defense/defense/anomaly_detector.py`
+    - `fit(benign_embeddings: np.ndarray) -> None` — huấn luyện Isolation Forest (mặc định) hoặc One-Class SVM
+    - `score(embedding: np.ndarray) -> float` — tính anomaly score cho 1 embedding
+    - `score_batch(embeddings: np.ndarray) -> np.ndarray` — tính batch, trả về array N phần tử
+    - `is_anomalous(score: float) -> bool` — so sánh với threshold
+    - `set_threshold(threshold: float) -> None` — cập nhật threshold không cần fit lại
+    - `save_model(path: str)` và `load_model(path: str)` dùng `joblib`
+    - Raise `RuntimeError` khi gọi `score()` trước khi `fit()`
+    - Xử lý mỗi chunk trong vòng 50ms
+    - _Yêu cầu: 4.1, 4.2, 4.3, 4.4, 4.5_
+  - [ ]* 10.2 Viết unit tests cho Anomaly_Detector
+    - Test `score_batch` trả về đúng N phần tử
+    - Test `is_anomalous` với score trên/dưới threshold
+    - Test `set_threshold` thay đổi kết quả ngay lập tức
+    - Test raise RuntimeError khi chưa fit
+    - File: `tests/unit/test_anomaly_detector.py`
+    - _Yêu cầu: 4.1, 4.2, 4.3, 4.4_
+  - [ ]* 10.3 Viết property test cho anomaly score batch size invariant
+    - **Property 10: Anomaly score batch size invariant**
+    - **Validates: Requirements 4.2**
+    - File: `tests/property/test_anomaly_props.py`
+  - [ ]* 10.4 Viết property test cho anomaly threshold behavior
+    - **Property 11: Anomaly threshold behavior**
+    - **Validates: Requirements 4.3, 4.4**
+    - File: `tests/property/test_anomaly_props.py`
+  - [ ]* 10.5 Viết property test cho anomaly action policy
+    - **Property 12: Anomaly action policy**
+    - **Validates: Requirements 4.7**
+    - File: `tests/property/test_anomaly_props.py`
+
+- [ ] 11. Triển khai Attention_Analyzer
+  - [ ] 11.1 Triển khai `rag_defense/defense/attention_analyzer.py`
+    - `extract_attention(model, input_ids: torch.Tensor) -> Optional[AttentionMatrix]` — trích xuất từ transformer layers cuối; trả về `None` và ghi log WARNING khi dùng GPT API
+    - `compute_context_ratio(attention: AttentionMatrix, context_span: tuple, query_span: tuple) -> float` — tổng attention trong context_span / tổng toàn bộ
+    - `is_suspicious(ratio: float, baseline_stats: BaselineStats) -> bool` — `True` khi `ratio > mean + 3 * std`
+    - `generate_heatmap(attention: AttentionMatrix, output_path: str) -> None` — tạo heatmap PNG khi debug mode bật
+    - _Yêu cầu: 5.1, 5.2, 5.3, 5.4, 5.5_
+  - [ ]* 11.2 Viết unit tests cho Attention_Analyzer
+    - Test `compute_context_ratio` với attention matrix đã biết
+    - Test `is_suspicious` với ratio trên/dưới ngưỡng 3*std
+    - Test GPT API path trả về None và ghi log
+    - File: `tests/unit/test_attention_analyzer.py`
+    - _Yêu cầu: 5.2, 5.3, 5.5_
+  - [ ]* 11.3 Viết property test cho attention context ratio correctness
+    - **Property 13: Attention context ratio correctness**
+    - **Validates: Requirements 5.2**
+    - File: `tests/property/test_attention_props.py`
+  - [ ]* 11.4 Viết property test cho attention suspicious detection
+    - **Property 14: Attention suspicious detection**
+    - **Validates: Requirements 5.3**
+    - File: `tests/property/test_attention_props.py`
+
+- [ ] 12. Checkpoint — Kiểm tra lớp phòng thủ
+  - Đảm bảo tất cả tests liên quan đến defense pass
+  - Chạy: `pytest tests/unit/test_context_sanitizer.py tests/unit/test_anomaly_detector.py tests/unit/test_attention_analyzer.py tests/property/test_sanitizer_props.py tests/property/test_anomaly_props.py tests/property/test_attention_props.py -v`
+  - Hỏi người dùng nếu có vấn đề phát sinh.
+
+- [ ] 13. Triển khai LLM interfaces
+  - [ ] 13.1 Triển khai `rag_defense/models/base_llm.py`
+    - Abstract class `BaseLLM` với `generate(prompt: str, context: str) -> LLMResponse`
+    - Abstract property `supports_attention: bool`
+    - _Yêu cầu: 6.1_
+  - [ ] 13.2 Triển khai `rag_defense/models/local_llm.py`
+    - `LocalLLM` kế thừa `BaseLLM`, gọi Ollama HTTP API
+    - Hỗ trợ `llama3` và `mistral` qua `llm_base_url` trong config
+    - `supports_attention = True` (trích xuất attention qua hooks nếu có)
+    - _Yêu cầu: 6.1_
+  - [ ] 13.3 Triển khai `rag_defense/models/openai_llm.py`
+    - `OpenAILLM` kế thừa `BaseLLM`, gọi OpenAI API
+    - `supports_attention = False`
+    - Raise `LLMConnectionError` khi kết nối thất bại
+    - _Yêu cầu: 6.1, 6.5_
+  - [ ]* 13.4 Viết property test cho LLM model selection from config
+    - **Property 15: LLM model selection from config**
+    - **Validates: Requirements 6.1**
+    - File: `tests/property/test_serialization_props.py`
+
+- [ ] 14. Triển khai Evaluator và Report_Generator
+  - [ ] 14.1 Triển khai `rag_defense/evaluation/evaluator.py`
+    - `compute_asr(results: list[ExperimentResult]) -> float`
+    - `compute_tpr_fpr(results: list[ExperimentResult]) -> tuple[float, float]`
+    - `compute_auc_roc(scores: np.ndarray, labels: np.ndarray) -> float` dùng `sklearn.metrics`
+    - `statistical_significance_test(results_a, results_b) -> SignificanceResult` dùng `scipy.stats`
+    - `verify_dataset_hashes(documents: list[Document]) -> None` — raise `HashIntegrityError` nếu hash không khớp
+    - `generate_report(all_results: dict[str, list[ExperimentResult]]) -> Report`
+    - _Yêu cầu: 2.3, 2.4, 2.5, 3.7, 4.6, 5.6, 6.2, 6.3, 6.4, 6.5, 6.6, 7.6, 8.2, 8.3_
+  - [ ] 14.2 Triển khai `rag_defense/evaluation/report_generator.py`
+    - `save_json(report: Report, output_dir: str) -> str` — lưu JSON có timestamp
+    - `save_csv(report: Report, output_dir: str) -> str` — bảng so sánh CSV
+    - `save_markdown(report: Report, output_dir: str) -> str` — bảng Markdown
+    - `save_charts(report: Report, output_dir: str) -> list[str]` — bar chart và ROC curve dùng `matplotlib`
+    - `print_summary(report: Report) -> None` — in tóm tắt ra console
+    - _Yêu cầu: 7.2, 7.3, 6.4_
+  - [ ]* 14.3 Viết unit tests cho Evaluator
+    - Test `compute_asr`, `compute_tpr_fpr`, `compute_auc_roc` với ground truth đã biết
+    - Test `verify_dataset_hashes` raise lỗi khi hash không khớp
+    - Test `statistical_significance_test` với hai tập kết quả khác nhau
+    - File: `tests/unit/test_evaluator.py`
+    - _Yêu cầu: 2.5, 3.7, 4.6, 6.3, 6.6, 8.2, 8.3_
+  - [ ]* 14.4 Viết property test cho metric computation correctness
+    - **Property 6: Metric computation correctness**
+    - **Validates: Requirements 2.5, 3.7, 4.6, 6.3**
+    - File: `tests/property/test_evaluator_props.py`
+  - [ ]* 14.5 Viết property test cho statistical significance test correctness
+    - **Property 16: Statistical significance test correctness**
+    - **Validates: Requirements 6.6**
+    - File: `tests/property/test_evaluator_props.py`
+
+- [ ] 15. Triển khai RAG_Pipeline (Orchestrator)
+  - [ ] 15.1 Triển khai `rag_defense/pipeline/rag_pipeline.py`
+    - `__init__(self, config: PipelineConfig)` — khởi tạo tất cả thành phần từ config
+    - `ingest(source: str | list[str]) -> None` — load → chunk → embed → store
+    - `query(question: str) -> QueryResult` — retrieve → sanitize → anomaly check → attention check → generate
+    - `run_experiment(dataset: list[Document], queries: list[str]) -> list[ExperimentResult]`
+    - Thông báo cho user khi Vector_Store rỗng (yêu cầu 1.9)
+    - Áp dụng partial failure strategy cho multi-model evaluation (yêu cầu 6.5)
+    - Ghi `experiment_seed` vào mỗi `ExperimentResult`
+    - _Yêu cầu: 1.7, 1.8, 1.9, 4.7, 6.1, 6.5, 8.4_
+  - [ ]* 15.2 Viết unit tests cho pipeline integration
+    - Test luồng ingest → query với mock LLM và mock components
+    - Test pipeline thông báo khi store rỗng
+    - Test partial failure khi một model thất bại
+    - File: `tests/unit/test_pipeline_integration.py`
+    - _Yêu cầu: 1.9, 6.5_
+
+- [ ] 16. Triển khai CLI
+  - [ ] 16.1 Triển khai `rag_defense/cli/main.py`
+    - Dùng `click` để định nghĩa CLI với các subcommand: `ingest`, `query`, `experiment`
+    - Options: `--config` (YAML path), `--model` (llm model), `--defense` (on/off flags), `--dataset` (path), `--threshold` (float), `--log-level`
+    - Subcommand `experiment` chạy `run_experiment()` và gọi `generate_report()`
+    - In tóm tắt kết quả ra console khi experiment hoàn thành
+    - _Yêu cầu: 7.1, 7.4, 7.6_
+  - Tạo `config/default_config.yaml` với tất cả tham số mặc định
+  - _Yêu cầu: 7.1, 7.5_
+
+- [ ] 17. Tạo conftest.py và cấu hình Hypothesis
+  - Tạo `tests/conftest.py` với Hypothesis profiles: `ci` (max_examples=100) và `dev` (max_examples=50)
+  - Tạo `tests/__init__.py`, `tests/unit/__init__.py`, `tests/property/__init__.py`
+  - Tạo `pytest.ini` hoặc section `[tool.pytest.ini_options]` trong `pyproject.toml`
+
+- [ ] 18. Checkpoint cuối — Đảm bảo toàn bộ test suite pass
+  - Chạy toàn bộ unit tests và property tests: `pytest tests/unit/ tests/property/ -v --tb=short`
+  - Đảm bảo tất cả 19 property tests được implement và pass
+  - Hỏi người dùng nếu có vấn đề phát sinh.
+
+## Ghi Chú
+
+- Tasks đánh dấu `*` là tùy chọn, có thể bỏ qua để triển khai MVP nhanh hơn
+- Mỗi property test tương ứng với một property trong design.md, được annotate bằng comment `# Feature: rag-indirect-prompt-injection-defense, Property N: ...`
+- Tất cả property tests dùng `@settings(max_examples=100)` theo cấu hình CI
+- Experiment tests (baseline, ablation, cross-model) chạy riêng biệt với `pytest tests/experiments/` vì cần model thực
+- Partial failure strategy đảm bảo evaluation tiếp tục khi GPT API thất bại (yêu cầu 6.5)
