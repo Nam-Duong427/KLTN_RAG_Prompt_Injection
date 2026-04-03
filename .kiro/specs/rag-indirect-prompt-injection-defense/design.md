@@ -22,68 +22,62 @@ Hệ thống được thiết kế theo nguyên tắc **modular pipeline** — m
 ### Sơ Đồ Kiến Trúc Tổng Thể
 
 ```mermaid
-graph TB
-    subgraph INPUT["Lớp Đầu Vào"]
-        PDF[PDF Files]
-        URL[Web URLs]
-        MANIFEST[Manifest JSON]
+flowchart TD
+    classDef base fill:#6B7A99,stroke:#4A5568,color:#F7FAFC
+    classDef mid fill:#4A5568,stroke:#2D3748,color:#F7FAFC
+    classDef strong fill:#2D3748,stroke:#1A202C,color:#F7FAFC,stroke-width:2px
+
+    subgraph INPUT["Input Layer"]
+        PDF["PDF Files"]
+        URL["Web URLs"]
+        MANIFEST["Manifest JSON"]
     end
 
-    subgraph INGESTION["Lớp Nạp Dữ Liệu"]
-        DL[Document_Loader<br/>SHA-256 Hash]
-        CK[Chunker<br/>512 tokens / 50 overlap]
-        EM[Embedder<br/>sentence-transformers]
-        VS[Vector_Store<br/>ChromaDB / FAISS]
+    subgraph INGEST["Ingestion Layer"]
+        DL["Document Loader\nSHA-256 · label · attack_type"]
+        CK["Chunker\n512 tokens / 50 overlap"]
+        EM["Embedder\nsentence-transformers"]
+        VS["Vector Store\nChromaDB / FAISS"]
+        RT["Retriever\nTop-5 cosine similarity"]
     end
 
-    subgraph DEFENSE["Lớp Phòng Thủ"]
-        CS[Context_Sanitizer<br/>Pattern Filter + Delimiters + Unicode Norm]
-        AD[Anomaly_Detector<br/>Isolation Forest / One-Class SVM]
-        AA[Attention_Analyzer<br/>Transformer Attention Weights]
+    subgraph DEFENSE["Defense Layer"]
+        CS["Context Sanitizer\nPattern Filter · Unicode Norm"]
+        AD["Anomaly Detector\nIsolation Forest / One-Class SVM"]
+        AA["Attention Analyzer\nTransformer Attention Weights"]
     end
 
-    subgraph INFERENCE["Lớp Suy Luận"]
-        RT[Retriever<br/>Top-5 cosine similarity]
-        LLM_LOCAL[LLaMA / Mistral<br/>Local via Ollama]
-        LLM_API[GPT API<br/>OpenAI]
+    subgraph GEN["Generation Layer"]
+        LLAMA["LLaMA 3\nLocal · Ollama"]
+        MISTRAL["Mistral\nLocal · Ollama"]
+        GPT["GPT API\nOpenAI"]
     end
 
-    subgraph EVALUATION["Lớp Đánh Giá"]
-        EV[Evaluator<br/>ASR, TPR, FPR, AUC-ROC]
-        RPT[Report Generator<br/>JSON, CSV, PNG, Markdown]
+    subgraph EVAL["Evaluation Layer"]
+        EV["Evaluator\nASR · TPR · FPR · AUC-ROC"]
+        RPT["Report Generator\nJSON · CSV · PNG · Markdown"]
     end
 
-    subgraph CONFIG["Cấu Hình & Điều Phối"]
-        CLI[CLI Interface]
-        YAML[YAML Config]
-        LOG[Logger]
+    subgraph CFG["Config & Orchestration"]
+        CLI["CLI"]
+        YAML["YAML Config"]
+        LOG["Logger"]
     end
 
     PDF --> DL
     URL --> DL
     MANIFEST --> DL
-    DL --> CK
-    CK --> EM
-    EM --> VS
-    VS --> RT
-    RT --> CS
-    CS --> AD
-    AD --> AA
-    AA --> LLM_LOCAL
-    AA --> LLM_API
-    LLM_LOCAL --> EV
-    LLM_API --> EV
-    EV --> RPT
+    DL --> CK --> EM --> VS --> RT
+    RT --> CS --> AD --> AA
+    AA --> LLAMA & MISTRAL & GPT
+    LLAMA & MISTRAL & GPT --> EV --> RPT
     CLI --> YAML
-    YAML --> DL
-    YAML --> CS
-    YAML --> AD
-    YAML --> AA
-    LOG -.-> DL
-    LOG -.-> CS
-    LOG -.-> AD
-    LOG -.-> AA
-    LOG -.-> EV
+    YAML -.-> DL & CS & AD & AA
+    LOG -.-> DL & CS & AD & EV
+
+    class PDF,URL,MANIFEST,CLI,YAML,LOG base
+    class DL,CK,EM,VS,RT,EV,RPT mid
+    class CS,AD,AA,LLAMA,MISTRAL,GPT strong
 ```
 
 ### Luồng Dữ Liệu Chính
