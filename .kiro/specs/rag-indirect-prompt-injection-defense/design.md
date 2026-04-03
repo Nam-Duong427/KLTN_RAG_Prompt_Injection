@@ -82,39 +82,53 @@ flowchart TD
 
 ### Luồng Dữ Liệu Chính
 
+**Bước 1 — Ingestion: Nạp tài liệu vào hệ thống**
+
 ```mermaid
 sequenceDiagram
-    participant User
+    actor User
     participant CLI
-    participant DL as Document_Loader
+    participant DL as Document Loader
     participant CK as Chunker
     participant EM as Embedder
-    participant VS as Vector_Store
+    participant VS as Vector Store
+
+    User->>CLI: ingest --config config.yaml --dataset manifest.json
+    CLI->>DL: load_manifest(manifest.json)
+    DL->>DL: compute_sha256(content)
+    DL-->>CLI: documents[] + labels + hashes
+    CLI->>CK: chunk(documents)
+    CK-->>CLI: chunks[] (512 tokens / 50 overlap)
+    CLI->>EM: embed_batch(chunks)
+    EM-->>CLI: embeddings (N × dim)
+    CLI->>VS: add(chunks, embeddings)
+    VS-->>CLI: stored
+    CLI-->>User: Ingestion complete
+```
+
+**Bước 2 — Query: Truy vấn qua Defense Pipeline**
+
+```mermaid
+sequenceDiagram
+    actor User
     participant RT as Retriever
-    participant CS as Context_Sanitizer
-    participant AD as Anomaly_Detector
-    participant AA as Attention_Analyzer
+    participant CS as Context Sanitizer
+    participant AD as Anomaly Detector
+    participant AA as Attention Analyzer
     participant LLM
     participant EV as Evaluator
 
-    User->>CLI: run_experiment --config config.yaml
-    CLI->>DL: load_documents(manifest.json)
-    DL->>DL: compute_sha256()
-    DL->>CK: raw_text + metadata
-    CK->>EM: chunks[]
-    EM->>VS: embeddings + metadata
-
-    User->>CLI: query "Câu hỏi?"
-    CLI->>RT: retrieve(query, top_k=5)
-    RT->>VS: cosine_similarity_search()
-    VS-->>RT: top_5_chunks
-    RT->>CS: sanitize(chunks)
-    CS->>AD: anomaly_check(chunks)
-    AD->>AA: attention_check(chunks, query)
+    User->>RT: query("Câu hỏi?", top_k=5)
+    RT-->>CS: top_5_chunks (cosine similarity)
+    CS->>CS: detect_patterns() + normalize_unicode()
+    CS-->>AD: sanitized_chunks
+    AD->>AD: score_batch(embeddings)
+    AD-->>AA: chunks + anomaly_scores
     AA->>LLM: generate(context, query)
     LLM-->>AA: response + attention_weights
-    AA-->>EV: response + attention_scores
-    EV-->>User: result + metrics
+    AA->>AA: compute_context_ratio()
+    AA-->>EV: response + attention_scores + flags
+    EV-->>User: answer + metrics (ASR, TPR, FPR)
 ```
 
 ### Kiến Trúc Module
